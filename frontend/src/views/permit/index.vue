@@ -71,9 +71,9 @@ type Row = Record<string, string | number | null>
 
 const ENDPOINT = '/api/permit'
 const columns = ["许可编号", "许可类型", "申请地点", "受理单位", "申请日期", "有效期至", "许可费用", "许可状态"]
-const actions = ["提交申请", "确认批准", "驳回申请"]
+const actions = ["提交申请", "确认批准", "驳回申请", "撤回申请"]
 const statuses = ["待申请", "已受理", "已批准", "已驳回", "已过期"]
-const stats = [{"label": "待申请许可", "value": 0}, {"label": "已批准许可", "value": 0}, {"label": "即将过期许可", "value": 0}]
+const stats = ref([{"label": "待申请许可", "value": 0}, {"label": "已批准许可", "value": 0}, {"label": "即将过期许可", "value": 0}])
 
 const rows = ref<Row[]>([])
 const total = ref(0)
@@ -99,10 +99,15 @@ async function runAction(action: string, row: Row) {
   try {
     const response = await request(`${ENDPOINT}/${row.id}/actions`, {
       method: 'POST',
-      body: JSON.stringify({ action }),
+      body: JSON.stringify({ values: { action } }),
     })
     if (!response.ok) {
       throw new Error('外景许可动作未生效，请稍后重试')
+    }
+    const result = await response.json()
+    // 后端把「状态冲突/动作非法」放在 ok=false 里返回（HTTP 仍是 200），不检查就会假装成功。
+    if (!result.ok) {
+      throw new Error(result.message ?? '外景许可动作未生效')
     }
     await reload()
   } catch (error) {
@@ -110,17 +115,43 @@ async function runAction(action: string, row: Row) {
   }
 }
 
+function refreshStats(items: Row[]) {
+  const countBy = (status: string) => items.filter((row) => row['许可状态'] === status).length
+  const today = new Date()
+  const soon = new Date()
+  soon.setDate(today.getDate() + 30)
+  const expiring = items.filter((row) => {
+    const raw = row['有效期至']
+    if (typeof raw !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+      return false
+    }
+    const deadline = new Date(raw)
+    return row['许可状态'] === '已批准' && deadline >= today && deadline <= soon
+  }).length
+  stats.value = [
+    {"label": "待申请许可", "value": countBy('待申请')},
+    {"label": "已批准许可", "value": countBy('已批准')},
+    {"label": "即将过期许可", "value": expiring},
+  ]
+}
+
 async function reload() {
   errorMessage.value = ''
   const query = new URLSearchParams(filters.value as Record<string, string>).toString()
   try {
-    const response = await request(`${ENDPOINT}?${query}`)
-    if (!response.ok) {
+    // 统计口径取全量，避免只数当前筛选/分页的一页。
+    const [pageResponse, allResponse] = await Promise.all([
+      request(`${ENDPOINT}?${query}`),
+      request(`${ENDPOINT}?size=200`),
+    ])
+    if (!pageResponse.ok || !allResponse.ok) {
       throw new Error('拍摄许可列表读取失败')
     }
-    const payload = await response.json()
+    const payload = await pageResponse.json()
     rows.value = payload.items ?? []
     total.value = payload.total ?? rows.value.length
+    const allPayload = await allResponse.json()
+    refreshStats(allPayload.items ?? [])
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '外景许可列表读取失败'
   }
