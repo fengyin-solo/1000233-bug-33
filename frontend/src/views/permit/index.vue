@@ -73,10 +73,16 @@ const ENDPOINT = '/api/permit'
 const columns = ["许可编号", "许可类型", "申请地点", "受理单位", "申请日期", "有效期至", "许可费用", "许可状态"]
 const actions = ["提交申请", "确认批准", "驳回申请"]
 const statuses = ["待申请", "已受理", "已批准", "已驳回", "已过期"]
-const stats = [{"label": "待申请许可", "value": 0}, {"label": "已批准许可", "value": 0}, {"label": "即将过期许可", "value": 0}]
+// 筛选框字段 -> 列表接口查询参数，保持与后端口径一致
+const FILTER_PARAMS: Record<string, string> = { 许可编号: 'keyword', 许可类型: 'permit_type', 申请地点: 'location' }
 
 const rows = ref<Row[]>([])
 const total = ref(0)
+const stats = ref([
+  { label: '待申请许可', value: 0 },
+  { label: '已批准许可', value: 0 },
+  { label: '即将过期许可', value: 0 },
+])
 const errorMessage = ref('')
 const filters = ref<Record<string, string>>({})
 const filterFields = columns.slice(0, 3)
@@ -99,10 +105,11 @@ async function runAction(action: string, row: Row) {
   try {
     const response = await request(`${ENDPOINT}/${row.id}/actions`, {
       method: 'POST',
-      body: JSON.stringify({ action }),
+      body: JSON.stringify({ values: { action } }),
     })
-    if (!response.ok) {
-      throw new Error('外景许可动作未生效，请稍后重试')
+    const result = await response.json()
+    if (!response.ok || !result.ok) {
+      throw new Error(result.message ?? '外景许可动作未生效，请稍后重试')
     }
     await reload()
   } catch (error) {
@@ -112,15 +119,24 @@ async function runAction(action: string, row: Row) {
 
 async function reload() {
   errorMessage.value = ''
-  const query = new URLSearchParams(filters.value as Record<string, string>).toString()
+  const query = new URLSearchParams()
+  for (const [field, param] of Object.entries(FILTER_PARAMS)) {
+    const value = filters.value[field]?.trim()
+    if (value) {
+      query.set(param, value)
+    }
+  }
   try {
-    const response = await request(`${ENDPOINT}?${query}`)
+    const response = await request(`${ENDPOINT}?${query.toString()}`)
     if (!response.ok) {
       throw new Error('拍摄许可列表读取失败')
     }
     const payload = await response.json()
     rows.value = payload.items ?? []
     total.value = payload.total ?? rows.value.length
+    if (Array.isArray(payload.summary)) {
+      stats.value = payload.summary
+    }
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '外景许可列表读取失败'
   }

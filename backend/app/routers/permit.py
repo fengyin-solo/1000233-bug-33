@@ -16,18 +16,28 @@ LIST_FIELDS = ["许可编号", "许可类型", "申请地点", "受理单位", "
 STATUSES = ["待申请", "已受理", "已批准", "已驳回", "已过期"]
 
 
-@router.get("", response_model=PageResult[dict])
+class PermitPageResult(PageResult[dict]):
+    """许可列表在分页结构外附带状态汇总，给页首概览卡用。"""
+
+    summary: list[dict[str, Any]] = []
+
+
+@router.get("", response_model=PermitPageResult)
 def list_entries(
     keyword: str | None = Query(default=None, description="按许可编号检索"),
+    permit_type: str | None = Query(default=None, description="按许可类型检索"),
+    location: str | None = Query(default=None, description="按申请地点检索"),
     status: str | None = Query(default=None, description="待申请、已受理、已批准、已驳回、已过期"),
     page: int = 1,
     size: int = 20,
-) -> PageResult[dict]:
-    """按许可编号与状态过滤外景许可列表；没有数据时返回空页，不报错。"""
+) -> PermitPageResult:
+    """按许可编号、类型、地点与状态过滤外景许可列表；没有数据时返回空页，不报错。"""
     if size > 200:
         raise HTTPException(status_code=400, detail="每页最多 200 条，请缩小分页范围")
-    items, total = service.list_entries(keyword=keyword, status=status, page=page, size=size)
-    return PageResult(items=items, total=total, page=page, size=size)
+    items, total = service.list_entries(
+        keyword=keyword, permit_type=permit_type, location=location, status=status, page=page, size=size
+    )
+    return PermitPageResult(items=items, total=total, page=page, size=size, summary=service.summarize())
 
 
 @router.get("/{entry_id}", response_model=dict)
